@@ -57,6 +57,36 @@ After that, merging to `main` is the whole release process.
 - One-off scripts (`data:move-to-workspaces`, `workspace:owner`) run through `az containerapp exec`.
 - Custom domain: set `custom_domain`, apply, then create the CNAME + TXT from the `custom_domain_dns` output.
 
+## Realtime (WebSockets) — optional
+
+`terraform/centrifugo.tf` adds a Centrifugo server (`ca-…-centrifugo`) that holds the sockets; your logic stays in
+workflows. It's off until `realtime_tenant` is set.
+
+```
+browser ══ wss://…/connection/websocket ══► centrifugo ── POST hooks ──► runtime /api/run/<tenant>/ws/{connect,subscribe,rpc}
+workflow "HTTP request" step ── POST …/api/publish (X-API-Key) ──► centrifugo ──► browsers
+```
+
+1. After the first owner exists, set in `envs/<env>.tfvars`: `realtime_tenant = "<workspace id>"` and
+   `realtime_namespaces` (every channel prefix before `:`, e.g. `orders` for `orders:o_123`). Merge → Terraform applies.
+2. In the builder (that workspace), create three **POST, JWT-auth** endpoints with *API request* workflows that answer
+   in Centrifugo's format through *Return response*:
+   - `/ws/connect` → `{"result": {"user": "{{request.auth.id}}"}}`
+   - `/ws/subscribe` → allow `{"result": {}}` · deny `{"error": {"code": 403, "message": "forbidden"}}`
+     (channel in `request.body.channel`)
+   - `/ws/rpc` → `{"result": {"data": {…}}}` (method in `request.body.method`, payload in `request.body.data`)
+3. Push from any workflow with an *HTTP request* step: URL = `terraform output realtime_publish_url`, headers
+   `{"content-type":"application/json","X-API-Key":"<key>"}`, body `{"channel":"orders:{{shipment.orderId}}","data":{…}}`.
+   Key: `az keyvault secret show --vault-name <kv> -n centrifugo-api-key --query value -o tsv`.
+4. Client (`centrifuge` npm, v6): `new Centrifuge(realtime_url, { headers: { Authorization: 'Bearer ' + appJwt } })`.
+   Browsers can't set WebSocket headers, so the SDK sends them in the connect frame (forwarded as `emulated_headers`);
+   don't use `token`/`getToken` — that's Centrifugo's own JWT and skips the connect workflow.
+
+Notes: publishing uses the public URL (`HTTP_ALLOW_PRIVATE_NETWORKS=false` blocks internal addresses). All hook calls
+come from Centrifugo, so per-IP rate limits on `/ws/*` see one IP — rely on per-user (JWT) limits. 401/403 from a hook
+become terminal disconnects (no reconnect loop). Custom domain: add it on the Container App (managed certificate)
+rather than Front Door.
+
 ## Tearing an environment down
 
 Deletes the environment's data (Atlas cluster and its backups, Redis, uploaded frontend).

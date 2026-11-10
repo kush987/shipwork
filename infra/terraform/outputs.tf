@@ -54,3 +54,15 @@ output "custom_domain_dns" {
     txt   = { name = "_dnsauth.${var.custom_domain}", value = azurerm_cdn_frontdoor_custom_domain.this[0].validation_token }
   }
 }
+
+# --- Realtime --------------------------------------------------------------------------------------
+
+output "realtime_url" {
+  description = "WebSocket URL for the Centrifugo client SDK (null until realtime_tenant is set)."
+  value       = local.realtime_enabled ? "wss://${azurerm_container_app.centrifugo[0].ingress[0].fqdn}/connection/websocket" : null
+}
+
+output "realtime_publish_url" {
+  description = "URL for workflows' HTTP request step (header X-API-Key = Key Vault secret centrifugo-api-key)."
+  value       = local.realtime_enabled ? "https://${azurerm_container_app.centrifugo[0].ingress[0].fqdn}/api/publish" : null
+}

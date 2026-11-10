@@ -16,3 +16,8 @@ apps = {
 
 allow_signup          = true
 platform_admin_emails = []
+
+# Realtime (centrifugo.tf). Set realtime_tenant to the workspace id after the first owner exists, then apply.
+realtime_tenant     = ""
+realtime_namespaces = ["orders"]
+realtime_replicas   = { min = 1, max = 2 }
