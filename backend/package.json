@@ -1,0 +1,46 @@
+{
+  "name": "shipflow-backend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "nest build",
+    "start": "node --env-file-if-exists=.env dist/main.js",
+    "start:dev": "nest start --watch",
+    "test": "jest",
+    "lint": "tsc --noEmit -p tsconfig.json",
+    "workspace:owner": "node dist/scripts/create-workspace-owner.js",
+    "data:move-to-workspaces": "node dist/scripts/migrate-business-data.js"
+  },
+  "dependencies": {
+    "@jitl/quickjs-wasmfile-release-sync": "^0.31.0",
+    "@nestjs/bullmq": "^11.0.5",
+    "@nestjs/common": "^11.2.8",
+    "@nestjs/core": "^11.2.8",
+    "@nestjs/event-emitter": "^3.1.0",
+    "@nestjs/mongoose": "^11.0.4",
+    "@nestjs/platform-express": "^11.2.8",
+    "@nestjs/swagger": "^11.4.7",
+    "bullmq": "^5.81.5",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.15.1",
+    "ioredis": "^5.11.1",
+    "jose": "^5.10.0",
+    "lodash": "^4.18.1",
+    "mongodb-connection-string-url": "^3.0.2",
+    "mongoose": "^8.24.7",
+    "quickjs-emscripten-core": "^0.31.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.24",
+    "@nestjs/testing": "^11.2.8",
+    "@types/express": "^5.0.6",
+    "@types/jest": "^29.5.14",
+    "@types/lodash": "^4.17.27",
+    "@types/node": "^22.20.5",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.4.15",
+    "typescript": "5.9"
+  }
+}

@@ -1,0 +1,17 @@
+# Dependencies and builds
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Editor and OS files
+.DS_Store
+*.save
+*.swp
+.idea/
+.vscode/

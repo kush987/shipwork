@@ -1,0 +1,22 @@
+services:
+  mongo:
+    image: mongo:7
+    # A one-member replica set: transactions and change streams (record triggers) need one.
+    # It listens on 27027 inside the container too, so its member address works from the host.
+    command: ["--replSet", "rs0", "--bind_ip_all", "--port", "27027"]
+    ports: ["27027:27027"]
+    volumes: [mongo-data:/data/db]
+    healthcheck:
+      # Starts the replica set the first time, then just reports that it's up.
+      test: ["CMD", "mongosh", "--port", "27027", "--quiet", "--eval", "try { rs.status().ok } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'localhost:27027' }] }).ok }"]
+      interval: 5s
+      retries: 20
+  redis:
+    image: redis:7-alpine
+    ports: ["6389:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+volumes:
+  mongo-data:

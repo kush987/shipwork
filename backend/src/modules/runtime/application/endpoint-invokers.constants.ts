@@ -1,0 +1,1 @@
+export const ENDPOINT_INVOKERS = Symbol('ENDPOINT_INVOKERS');

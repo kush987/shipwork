@@ -1,0 +1,1 @@
+export const REFERENCE_CHECKERS = Symbol('REFERENCE_CHECKERS');

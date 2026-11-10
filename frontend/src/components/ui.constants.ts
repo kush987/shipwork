@@ -1,0 +1,32 @@
+import type { Tone } from './ui.types';
+
+/** Badge tone for every status the app shows (executions, workflows, shipments, couriers). */
+export const STATUS_TONE: Record<string, Tone> = {
+  succeeded: 'success',
+  success: 'success',
+  published: 'success',
+  delivered: 'success',
+  closed: 'success',
+  serviceable: 'success',
+  running: 'info',
+  queued: 'neutral',
+  draft: 'neutral',
+  new: 'neutral',
+  superseded: 'neutral',
+  archived: 'neutral',
+  waiting: 'warning',
+  paused: 'warning',
+  awaiting_trigger: 'violet',
+  retrying: 'warning',
+  half_open: 'warning',
+  ndr: 'warning',
+  rto_initiated: 'warning',
+  failed: 'danger',
+  open: 'danger',
+  cancelled: 'danger',
+  rto_delivered: 'danger',
+  assigned: 'accent',
+  picked_up: 'info',
+  in_transit: 'info',
+  out_for_delivery: 'violet',
+};

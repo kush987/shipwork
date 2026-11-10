@@ -1,0 +1,1 @@
+export const COURIER_PROVIDERS = Symbol('COURIER_PROVIDERS');
