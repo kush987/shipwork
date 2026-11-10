@@ -1,0 +1,152 @@
+# Deploys one environment: backend image to the three Container Apps, frontend to storage + Front Door.
+# Resource names come from Terraform outputs, so nothing here needs updating when infra changes.
+name: Deploy environment
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+      image_tag:
+        type: string
+        required: true
+      source_registry:
+        description: Login server of the registry to copy the image from. Empty → build and push here.
+        type: string
+        default: ""
+    outputs:
+      registry:
+        value: ${{ jobs.deploy.outputs.registry }}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.tf.outputs.url }}
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    outputs:
+      registry: ${{ steps.tf.outputs.acr_login_server }}
+    env:
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ARM_USE_OIDC: "true"
+      TAG: ${{ inputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Read infrastructure outputs
+        id: tf
+        working-directory: infra/terraform
+        run: |
+          terraform init -input=false -backend-config=envs/${{ inputs.environment }}.backend.hcl >/dev/null
+          terraform output -json > /tmp/tf.json
+          for k in url resource_group acr_name acr_login_server image_repository web_storage_account frontdoor_profile frontdoor_endpoint; do
+            echo "$k=$(jq -r ".$k.value" /tmp/tf.json)" >> "$GITHUB_OUTPUT"
+          done
+          echo "apps=$(jq -c '.container_apps.value' /tmp/tf.json)" >> "$GITHUB_OUTPUT"
+          # After a bootstrap apply only the registry exists: push the image, skip the rest.
+          if [ "$(jq -r '.web_storage_account.value' /tmp/tf.json)" = "null" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Only the registry exists yet. Image pushed; now run Terraform apply for ${{ inputs.environment }}."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+          az config set extension.use_dynamic_install=yes_without_prompt >/dev/null
+
+      # --- Backend image -------------------------------------------------------------------------
+
+      - name: Build and push image
+        if: inputs.source_registry == ''
+        env:
+          IMAGE: ${{ steps.tf.outputs.acr_login_server }}/${{ steps.tf.outputs.image_repository }}
+        run: |
+          az acr login -n "${{ steps.tf.outputs.acr_name }}"
+          docker build -t "$IMAGE:$TAG" -t "$IMAGE:latest" backend
+          docker push --all-tags "$IMAGE"
+
+      - name: Promote image from ${{ inputs.source_registry }}
+        if: inputs.source_registry != ''
+        env:
+          REPO: ${{ steps.tf.outputs.image_repository }}
+        run: |
+          # The exact image tested in the previous environment, not a rebuild.
+          az acr import -n "${{ steps.tf.outputs.acr_name }}" --force \
+            --source "${{ inputs.source_registry }}/$REPO:$TAG" \
+            --image "$REPO:$TAG" --image "$REPO:latest"
+
+      - name: Roll out backend
+        if: steps.tf.outputs.ready == 'true'
+        env:
+          IMAGE: ${{ steps.tf.outputs.acr_login_server }}/${{ steps.tf.outputs.image_repository }}:${{ inputs.image_tag }}
+          RG: ${{ steps.tf.outputs.resource_group }}
+          APPS: ${{ steps.tf.outputs.apps }}
+        run: |
+          # Workers first (they pick up queued jobs with the new code), then the HTTP planes.
+          for role in worker runtime api; do
+            app=$(jq -r ".$role" <<<"$APPS")
+            echo "→ $app"
+            az containerapp update -n "$app" -g "$RG" --image "$IMAGE" -o none
+          done
+
+      # --- Frontend ------------------------------------------------------------------------------
+
+      - uses: actions/setup-node@v4
+        if: steps.tf.outputs.ready == 'true'
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        if: steps.tf.outputs.ready == 'true'
+        working-directory: frontend
+        run: npm ci && npm run build
+
+      - name: Upload frontend
+        if: steps.tf.outputs.ready == 'true'
+        env:
+          SA: ${{ steps.tf.outputs.web_storage_account }}
+        run: |
+          # Hashed assets are immutable; index.html must always be revalidated.
+          az storage blob upload-batch --auth-mode login --account-name "$SA" -d '$web' -s frontend/dist \
+            --overwrite --pattern 'assets/*' --content-cache-control 'public, max-age=31536000, immutable' -o none
+          az storage blob upload-batch --auth-mode login --account-name "$SA" -d '$web' -s frontend/dist \
+            --overwrite --content-cache-control 'no-cache' -o none
+
+      - name: Purge Front Door cache
+        if: steps.tf.outputs.ready == 'true'
+        run: |
+          az afd endpoint purge -g "${{ steps.tf.outputs.resource_group }}" \
+            --profile-name "${{ steps.tf.outputs.frontdoor_profile }}" \
+            --endpoint-name "${{ steps.tf.outputs.frontdoor_endpoint }}" \
+            --content-paths '/*' --no-wait
+
+      - name: Smoke test
+        if: steps.tf.outputs.ready == 'true'
+        env:
+          URL: ${{ steps.tf.outputs.url }}
+        run: |
+          for i in {1..30}; do
+            curl -fsS "$URL/api/health" && echo && exit 0
+            sleep 10
+          done
+          echo "::error::$URL/api/health did not answer"; exit 1
