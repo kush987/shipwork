@@ -164,3 +164,42 @@ variable "allow_destroy" {
   type        = bool
   default     = false
 }
+
+# --- Realtime (Centrifugo, see centrifugo.tf) ------------------------------------------------------
+
+variable "realtime_tenant" {
+  description = "Workspace id whose /ws/connect, /ws/subscribe and /ws/rpc endpoints handle Centrifugo's hooks. Empty: no realtime server."
+  type        = string
+  default     = ""
+}
+
+variable "realtime_namespaces" {
+  description = "Channel namespaces (the part before \":\" in a channel name, e.g. \"orders\" in orders:o_123). Each one's subscriptions go through /ws/subscribe."
+  type        = list(string)
+  default     = []
+}
+
+variable "centrifugo_version" {
+  description = "Centrifugo image tag (option names in centrifugo.tf are v6)."
+  type        = string
+  default     = "v6.10.3"
+}
+
+variable "realtime_replicas" {
+  type    = object({ min = number, max = number })
+  default = { min = 1, max = 3 }
+  validation {
+    condition     = var.realtime_replicas.min >= 1
+    error_message = "Keep at least one replica: open WebSockets need a live one."
+  }
+}
+
+variable "realtime_cpu" {
+  type    = number
+  default = 0.5
+}
+
+variable "realtime_memory" {
+  type    = string
+  default = "1Gi"
+}
