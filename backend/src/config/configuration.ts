@@ -14,6 +14,10 @@ export const appConfig = () => ({
   redis: {
     host: process.env.REDIS_HOST ?? 'localhost',
     port: parseInt(process.env.REDIS_PORT ?? '6389', 10),
+    // Managed Redis (e.g. Azure Managed Redis) needs an access key and TLS; local Redis needs neither.
+    username: process.env.REDIS_USERNAME || undefined,
+    password: process.env.REDIS_PASSWORD || undefined,
+    tls: process.env.REDIS_TLS === 'true' ? { servername: process.env.REDIS_HOST } : undefined,
   },
   role: (process.env.APP_ROLE ?? 'all') as AppRole,
   workerConcurrency: int(process.env.WORKER_CONCURRENCY, 10),

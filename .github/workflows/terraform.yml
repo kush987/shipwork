@@ -1,0 +1,128 @@
+# PRs touching infra → plan for both environments (in the job summary).
+# Merge to main → apply staging, then prod after approval.
+# Manual run → plan/apply one environment; "bootstrap" creates only the registry (first run, before any image exists);
+# "destroy" tears the environment down (type the environment name to confirm).
+name: Terraform
+
+on:
+  pull_request:
+    paths: [infra/terraform/**, .github/workflows/terraform.yml]
+  push:
+    branches: [main]
+    paths: [infra/terraform/**, .github/workflows/terraform.yml]
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [staging, prod]
+      action:
+        type: choice
+        options: [plan, apply, destroy]
+      bootstrap:
+        description: Only create the container registry (first run)
+        type: boolean
+        default: false
+      confirm_destroy:
+        description: For destroy, type the environment name again
+        type: string
+        default: ""
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  ARM_USE_OIDC: "true"
+  TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  TF_VAR_atlas_org_id: ${{ vars.ATLAS_ORG_ID }}
+  MONGODB_ATLAS_CLIENT_ID: ${{ secrets.MONGODB_ATLAS_CLIENT_ID }}
+  MONGODB_ATLAS_CLIENT_SECRET: ${{ secrets.MONGODB_ATLAS_CLIENT_SECRET }}
+  TF_IN_AUTOMATION: "true"
+
+defaults:
+  run:
+    working-directory: infra/terraform
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+
+  plan:
+    if: github.event_name == 'pull_request'
+    needs: check
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [staging, prod]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - run: terraform init -input=false -backend-config=envs/${{ matrix.environment }}.backend.hcl
+      - name: Plan
+        run: |
+          terraform plan -input=false -lock=false -no-color -var-file=envs/${{ matrix.environment }}.tfvars -out=tfplan
+          {
+            echo "### Terraform plan — ${{ matrix.environment }}"
+            echo '```'
+            terraform show -no-color tfplan | grep -E '^\s*(#|Plan:|No changes)' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  apply:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: check
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 1 # staging first, then prod
+      matrix:
+        environment: ${{ github.event_name == 'workflow_dispatch' && fromJSON(format('["{0}"]', inputs.environment)) || fromJSON('["staging","prod"]') }}
+    environment: ${{ matrix.environment }}
+    concurrency:
+      group: terraform-${{ matrix.environment }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - run: terraform init -input=false -backend-config=envs/${{ matrix.environment }}.backend.hcl
+      - name: Plan
+        if: inputs.action != 'destroy'
+        run: |
+          TARGETS=""""
+          if [ "${{ inputs.bootstrap }}" = "true" ]; then
+            TARGETS="-target=azurerm_container_registry.this -target=azurerm_role_assignment.deployer_acr_push"
+          fi
+          terraform plan -input=false -var-file=envs/${{ matrix.environment }}.tfvars $TARGETS -out=tfplan
+      - name: Apply
+        if: github.event_name == 'push' || inputs.action == 'apply'
+        run: terraform apply -input=false tfplan
+
+      - name: Destroy
+        if: inputs.action == 'destroy'
+        env:
+          ENV: ${{ matrix.environment }}
+          CONFIRM: ${{ inputs.confirm_destroy }}
+        run: |
+          if [ "$CONFIRM" != "$ENV" ]; then
+            echo "::error::Type '$ENV' in confirm_destroy to destroy it"; exit 1
+          fi
+          VARS="-input=false -auto-approve -var-file=envs/$ENV.tfvars -var allow_destroy=true"
+          # Lift Atlas termination protection (prod), then release the protected encryption key from state.
+          if terraform state list | grep -q '^mongodbatlas_advanced_cluster.this'; then
+            terraform apply $VARS -target=mongodbatlas_advanced_cluster.this
+          fi
+          terraform state rm random_bytes.data_encryption_key || true
+          terraform destroy $VARS

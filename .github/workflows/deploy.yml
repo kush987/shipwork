@@ -1,0 +1,41 @@
+# main → CI → staging (automatic) → prod (waits for approval on the "prod" environment).
+# prod gets the same image that passed staging, copied between registries — never rebuilt.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - backend/**
+      - frontend/**
+      - .github/workflows/ci.yml
+      - .github/workflows/deploy.yml
+      - .github/workflows/_deploy.yml
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-pipeline
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  staging:
+    needs: ci
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment: staging
+      image_tag: ${{ github.sha }}
+
+  prod:
+    needs: staging
+    uses: ./.github/workflows/_deploy.yml
+    with:
+      environment: prod
+      image_tag: ${{ github.sha }}
+      source_registry: ${{ needs.staging.outputs.registry }}
